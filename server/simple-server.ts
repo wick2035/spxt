@@ -2,6 +2,11 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { Sequelize, DataTypes, Model, Op } from 'sequelize';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { Request } from 'express';
+import { FileFilterCallback } from 'multer';
 
 // 加载环境变量
 dotenv.config();
@@ -12,6 +17,82 @@ const port = process.env.PORT || 5000;
 // 中间件
 app.use(cors());
 app.use(express.json());
+
+// 创建上传目录
+const uploadDir = path.join(__dirname, '../uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// 配置文件存储
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    // 获取学生学号 (从请求参数或请求体获取)
+    const studentId = req.params.studentId || req.body.studentId;
+    if (!studentId) {
+      return cb(new Error('Missing student ID'), '');
+    }
+    
+    // 创建以学号命名的文件夹
+    const studentDir = path.join(uploadDir, studentId);
+    if (!fs.existsSync(studentDir)) {
+      fs.mkdirSync(studentDir, { recursive: true });
+    }
+    
+    cb(null, studentDir);
+  },
+  filename: function (req, file, cb) {
+    // 生成文件名：原始文件名-时间戳.扩展名
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+  }
+});
+
+// 配置文件过滤器
+const fileFilter = (req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
+  // 只允许上传PDF和图片文件
+  const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+  console.log(`检查文件类型: ${file.mimetype}, 文件名: ${file.originalname}`);
+  
+  if (allowedTypes.includes(file.mimetype)) {
+    console.log('文件类型有效');
+    cb(null, true);
+  } else {
+    console.log(`文件类型 ${file.mimetype} 不允许`);
+    cb(null, false);
+    // 由于类型限制，我们不能直接传递Error对象
+  }
+};
+
+// 初始化上传中间件
+const upload = multer({ 
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB
+  }
+});
+
+// 添加错误处理中间件
+app.use((err: any, req: Request, res: any, next: any) => {
+  if (err instanceof multer.MulterError) {
+    // Multer 错误
+    console.error('Multer错误:', err);
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ message: '文件大小超过限制(5MB)' });
+    }
+    return res.status(400).json({ message: `文件上传错误: ${err.message}` });
+  } else if (err) {
+    // 其他错误
+    console.error('文件上传时发生错误:', err);
+    return res.status(500).json({ message: `服务器错误: ${err.message}` });
+  }
+  next();
+});
+
+// 创建静态文件服务
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // 创建Sequelize实例
 const sequelize = new Sequelize(
@@ -125,7 +206,7 @@ Application.init(
       allowNull: true,
     },
     scholarshipItems: {
-      type: DataTypes.TEXT, // 使用TEXT类型存储JSON数据
+      type: DataTypes.TEXT,
       allowNull: true,
       get() {
         const rawValue = this.getDataValue('scholarshipItems');
@@ -157,8 +238,8 @@ Application.init(
 );
 
 // 批次和申请的关联关系
-Batch.hasMany(Application, { foreignKey: 'batchId' });
-Application.belongsTo(Batch, { foreignKey: 'batchId' });
+Batch.hasMany(Application, { foreignKey: 'batchId', as: 'applications' });
+Application.belongsTo(Batch, { foreignKey: 'batchId', as: 'batch' });
 
 // 更新批次状态的函数
 async function updateBatchStatuses() {
@@ -360,7 +441,7 @@ app.get('/api/applications/admin', async (req, res) => {
     
     const applications = await Application.findAll({
       where,
-      include: [{ model: Batch }],
+      include: [{ model: Batch, as: 'batch' }],
       order: [['createdAt', 'DESC']]
     });
     
@@ -406,15 +487,51 @@ app.get('/api/applications/:id', async (req, res) => {
     console.log(`获取申请 ${id} 详情`);
     
     const application = await Application.findByPk(id, {
-      include: [{ model: Batch }]
+      include: [{ model: Batch, as: 'batch' }]
     });
     
     if (!application) {
       return res.status(404).json({ message: '找不到申请' });
     }
     
-    console.log('申请详情:', application);
-    res.json(application);
+    // 获取奖学金项目列表
+    const items = application.get('scholarshipItems');
+    let scholarshipItems: ScholarshipItem[] = [];
+    
+    try {
+      if (typeof items === 'string') {
+        scholarshipItems = JSON.parse(items);
+      } else if (Array.isArray(items)) {
+        scholarshipItems = items;
+      }
+    } catch (error) {
+      console.error('解析scholarshipItems失败:', error);
+      scholarshipItems = [];
+    }
+    
+    // 构建响应数据
+    const responseData = {
+      id: application.id,
+      userId: application.userId,
+      batchId: application.batchId,
+      status: application.status,
+      reviewComment: application.reviewComment,
+      reviewedBy: application.reviewedBy,
+      reviewedAt: application.reviewedAt,
+      createdAt: application.createdAt,
+      batch: application.get('batch'),
+      scholarshipItems: scholarshipItems.map((item: ScholarshipItem, index: number) => ({
+        ...item,
+        index, // 添加索引信息
+        fileUrl: item.fileUrl || null,
+        fileName: item.fileName || null,
+        fileSize: item.fileSize || null,
+        fileType: item.fileType || null
+      }))
+    };
+    
+    console.log('申请详情:', responseData);
+    res.json(responseData);
   } catch (error) {
     console.error('获取申请详情错误:', error);
     res.status(500).json({ message: '服务器错误' });
@@ -534,13 +651,13 @@ app.get('/api/student/applications/:studentId', async (req, res) => {
     
     const applications = await Application.findAll({
       where: { userId: studentId },
-      include: [{ model: Batch }],
+      include: [{ model: Batch, as: 'batch' }],
       order: [['createdAt', 'DESC']]
     });
     
     // 转换为前端需要的格式
     const formattedApplications = applications.map(app => {
-      const batch = app.get('Batch') as any;
+      const batch = app.get('batch') as any;
       const rawItems = app.get('scholarshipItems');
       
       console.log("原始数据类型:", typeof rawItems);
@@ -631,6 +748,128 @@ app.post('/api/student/applications', async (req, res) => {
     });
   } catch (error) {
     console.error('创建学生申请错误:', error);
+    res.status(500).json({ message: '服务器错误' });
+  }
+});
+
+// 定义奖学金项目类型
+interface ScholarshipItem {
+  type?: string;
+  level?: string;
+  name?: string;
+  score?: string | number;
+  amount?: number;
+  [key: string]: any; // 允许其他可能的属性
+}
+
+// 上传证明材料
+app.post('/api/student/applications/:applicationId/upload/:studentId', upload.single('file'), async (req, res) => {
+  try {
+    const { applicationId, studentId } = req.params;
+    const { itemIndex } = req.body; // 新增：接收项目索引
+    
+    // 检查申请是否存在
+    const application = await Application.findOne({
+      where: { id: applicationId, userId: studentId }
+    });
+    
+    if (!application) {
+      return res.status(404).json({ message: '找不到申请或无权操作' });
+    }
+    
+    // 只有待审核状态的申请才能上传材料
+    if (application.status !== '待审核') {
+      return res.status(400).json({ message: '只有待审核的申请可以上传证明材料' });
+    }
+    
+    if (!req.file) {
+      return res.status(400).json({ message: '未收到文件或文件上传失败' });
+    }
+    
+    // 获取当前的奖学金项目列表
+    const items = application.get('scholarshipItems');
+    let scholarshipItems: ScholarshipItem[] = [];
+    
+    try {
+      if (typeof items === 'string') {
+        scholarshipItems = JSON.parse(items);
+      } else if (Array.isArray(items)) {
+        scholarshipItems = items;
+      }
+    } catch (error) {
+      console.error('解析scholarshipItems失败:', error);
+      scholarshipItems = [];
+    }
+    
+    // 确保itemIndex是有效的
+    const index = parseInt(itemIndex);
+    if (isNaN(index) || index < 0 || index >= scholarshipItems.length) {
+      return res.status(400).json({ message: '无效的项目索引' });
+    }
+    
+    // 更新对应项目的文件信息
+    scholarshipItems[index] = {
+      ...scholarshipItems[index],
+      fileUrl: `/uploads/${studentId}/${req.file.filename}`,
+      fileName: req.file.originalname,
+      fileSize: req.file.size,
+      fileType: req.file.mimetype
+    };
+    
+    // 更新申请记录
+    await application.update({
+      scholarshipItems: scholarshipItems
+    });
+    
+    // 返回文件信息
+    const fileInfo = {
+      fieldname: req.file.fieldname,
+      originalname: req.file.originalname,
+      filename: req.file.filename,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      path: req.file.path.replace(/\\/g, '/'),
+      destination: req.file.destination.replace(/\\/g, '/'),
+      url: `/uploads/${studentId}/${req.file.filename}`
+    };
+    
+    console.log('文件上传成功:', fileInfo);
+    res.status(200).json({ 
+      success: true, 
+      message: '证明材料上传成功',
+      fileInfo,
+      scholarshipItems
+    });
+  } catch (error) {
+    console.error('上传证明材料错误:', error);
+    res.status(500).json({ message: '服务器错误' });
+  }
+});
+
+// 获取学生证明材料列表
+app.get('/api/student/documents/:studentId', (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const studentDir = path.join(uploadDir, studentId);
+    
+    if (!fs.existsSync(studentDir)) {
+      return res.status(200).json({ files: [] });
+    }
+    
+    const files = fs.readdirSync(studentDir).map(filename => {
+      const stats = fs.statSync(path.join(studentDir, filename));
+      return {
+        filename,
+        originalname: filename.split('-').slice(1).join('-'), // 尝试还原原始文件名
+        size: stats.size,
+        uploadedAt: stats.mtime,
+        url: `/uploads/${studentId}/${filename}`
+      };
+    });
+    
+    res.status(200).json({ files });
+  } catch (error) {
+    console.error('获取证明材料列表错误:', error);
     res.status(500).json({ message: '服务器错误' });
   }
 });
@@ -742,6 +981,325 @@ app.delete('/api/applications/:id', async (req, res) => {
       message: '服务器错误，请稍后再试',
       error: error instanceof Error ? error.message : String(error)
     });
+  }
+});
+
+// 仪表盘统计数据
+app.get('/api/admin/dashboard/stats', async (req, res) => {
+  try {
+    console.log('获取仪表盘统计数据请求');
+    
+    // 获取总申请数
+    const totalApplications = await Application.count();
+    
+    // 获取待审核申请数
+    const pendingApplications = await Application.count({
+      where: { status: '待审核' }
+    });
+    
+    // 获取已通过申请数
+    const approvedApplications = await Application.count({
+      where: { status: '已通过' }
+    });
+    
+    // 获取已驳回申请数
+    const rejectedApplications = await Application.count({
+      where: { status: '已拒绝' }
+    });
+    
+    console.log('统计数据:', {
+      totalApplications,
+      pendingApplications,
+      approvedApplications,
+      rejectedApplications
+    });
+    
+    res.json({
+      totalApplications,
+      pendingApplications,
+      approvedApplications,
+      rejectedApplications
+    });
+  } catch (error) {
+    console.error('获取仪表盘统计数据失败:', error);
+    res.status(500).json({ message: '服务器错误' });
+  }
+});
+
+// 最近申请数据
+app.get('/api/admin/dashboard/recent-applications', async (req, res) => {
+  try {
+    console.log('获取最近申请数据请求');
+    
+    const applications = await Application.findAll({
+      order: [['createdAt', 'DESC']],
+      limit: 5,
+      include: [{
+        model: Batch,
+        as: 'batch'
+      }]
+    });
+    
+    // 格式化数据以匹配前端期望的格式
+    const formattedApplications = applications.map((app) => {
+      // 获取用户信息（此处简化处理，实际应从用户表获取）
+      const userName = '' + app.userId.substring(0, 11);
+      
+      // 获取批次信息
+      const batchData = (app as any).batch;
+      
+      return {
+        id: app.id,
+        name: userName,
+        type: batchData ? batchData.name : '未知奖学金',
+        date: new Date(app.createdAt).toISOString().split('T')[0],
+        status: app.status
+      };
+    });
+    
+    console.log('最近申请数据:', formattedApplications);
+    res.json(formattedApplications);
+  } catch (error) {
+    console.error('获取最近申请数据失败:', error);
+    res.status(500).json({ message: '服务器错误' });
+  }
+});
+
+// 学生端仪表盘统计数据
+app.get('/api/student/dashboard/stats/:studentId', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    console.log(`获取学生${studentId}的仪表盘统计数据请求`);
+    
+    // 获取该学生的所有申请
+    const applications = await Application.findAll({
+      where: { userId: studentId },
+      include: [{ model: Batch, as: 'batch' }]
+    });
+    
+    // 统计数据
+    const totalBatches = await Batch.count({
+      where: { status: '进行中' }
+    });
+    
+    const totalApplications = applications.length;
+    const pendingApplications = applications.filter(app => app.status === '待审核').length;
+    const approvedApplications = applications.filter(app => app.status === '已通过').length;
+    const rejectedApplications = applications.filter(app => app.status === '已拒绝' || app.status === '已驳回').length;
+    
+    console.log('学生仪表盘统计数据:', {
+      totalBatches,
+      totalApplications,
+      pendingApplications,
+      approvedApplications,
+      rejectedApplications
+    });
+    
+    res.json({
+      totalBatches,
+      totalApplications,
+      pendingApplications,
+      approvedApplications,
+      rejectedApplications
+    });
+  } catch (error) {
+    console.error('获取学生仪表盘统计数据失败:', error);
+    res.status(500).json({ message: '服务器错误' });
+  }
+});
+
+// 模拟用户数据
+const users = [
+  {
+    id: 1,
+    username: "admin",
+    name: "系统管理员",
+    role: "管理员",
+    email: "admin@example.com",
+    status: "正常",
+    lastLogin: "2024-03-25 10:30:00",
+    password: "admin123"
+  },
+  {
+    id: 2,
+    username: "student1",
+    name: "张三",
+    role: "学生",
+    email: "zhangsan@example.com",
+    status: "正常",
+    lastLogin: "2024-03-24 14:25:00",
+    password: "123456"
+  },
+  {
+    id: 3,
+    username: "student2",
+    name: "李四",
+    role: "学生",
+    email: "lisi@example.com",
+    status: "禁用",
+    lastLogin: "2024-03-23 09:15:00",
+    password: "123456"
+  }
+];
+
+// 获取所有用户
+app.get('/api/admin/users', (req, res) => {
+  console.log("获取用户列表请求已接收");
+  res.status(200).json(users);
+});
+
+// 获取单个用户
+app.get('/api/admin/users/:id', (req, res) => {
+  const userId = parseInt(req.params.id);
+  const user = users.find(u => u.id === userId);
+  if (!user) {
+    return res.status(404).json({ message: '用户不存在' });
+  }
+  res.status(200).json(user);
+});
+
+// 创建用户
+app.post('/api/admin/users', (req, res) => {
+  const { username, name, role, email } = req.body;
+  console.log('创建用户请求:', req.body);
+  
+  // 验证必填字段
+  if (!username || !name || !role || !email) {
+    return res.status(400).json({ message: '所有字段都是必填的' });
+  }
+  
+  // 检查用户名是否存在
+  if (users.some(u => u.username === username)) {
+    return res.status(400).json({ message: '用户名已存在' });
+  }
+  
+  // 创建新用户
+  const newUser = {
+    id: users.length + 1,
+    username,
+    name,
+    role,
+    email,
+    status: "正常",
+    lastLogin: new Date().toISOString().replace('T', ' ').substring(0, 19),
+    password: "123456"
+  };
+  
+  users.push(newUser);
+  console.log('新用户已创建:', newUser);
+  res.status(201).json(newUser);
+});
+
+// 更新用户状态
+app.patch('/api/admin/users/:id/status', (req, res) => {
+  const userId = parseInt(req.params.id);
+  const { status } = req.body;
+  console.log(`更新用户${userId}状态为${status}的请求`);
+  
+  if (!status || !['正常', '禁用'].includes(status)) {
+    return res.status(400).json({ message: '状态值无效' });
+  }
+  
+  const userIndex = users.findIndex(u => u.id === userId);
+  if (userIndex === -1) {
+    return res.status(404).json({ message: '用户不存在' });
+  }
+  
+  // 更新用户状态
+  users[userIndex].status = status;
+  console.log('用户状态已更新:', users[userIndex]);
+  
+  res.status(200).json({
+    message: '用户状态已更新',
+    user: users[userIndex]
+  });
+});
+
+// 重置用户密码
+app.patch('/api/admin/users/:id/reset-password', (req, res) => {
+  const userId = parseInt(req.params.id);
+  console.log(`重置用户${userId}密码的请求`);
+  
+  const userIndex = users.findIndex(u => u.id === userId);
+  if (userIndex === -1) {
+    return res.status(404).json({ message: '用户不存在' });
+  }
+  
+  // 重置密码为默认值123456
+  users[userIndex].password = '123456';
+  console.log('用户密码已重置:', users[userIndex]);
+  
+  res.status(200).json({
+    message: '用户密码已重置为默认密码：123456',
+    user: users[userIndex]
+  });
+});
+
+// 删除用户
+app.delete('/api/admin/users/:id', (req, res) => {
+  const userId = parseInt(req.params.id);
+  console.log(`删除用户${userId}的请求`);
+  
+  const userIndex = users.findIndex(u => u.id === userId);
+  if (userIndex === -1) {
+    return res.status(404).json({ message: '用户不存在' });
+  }
+  
+  // 从数组中删除用户
+  const deletedUser = users.splice(userIndex, 1)[0];
+  console.log('用户已删除:', deletedUser);
+  
+  res.status(200).json({
+    message: '用户已删除',
+    user: deletedUser
+  });
+});
+
+// 删除申请
+app.delete('/api/admin/applications/:id', async (req, res) => {
+  const applicationId = req.params.id;
+  console.log(`删除申请${applicationId}的请求`);
+  
+  try {
+    const application = await Application.findByPk(applicationId);
+    if (!application) {
+      return res.status(404).json({ message: '申请不存在' });
+    }
+    
+    await application.destroy();
+    console.log('申请已删除');
+    
+    res.status(200).json({ message: '申请已删除' });
+  } catch (error) {
+    console.error('删除申请失败:', error);
+    res.status(500).json({ message: '服务器错误' });
+  }
+});
+
+// 测试API路由
+app.get('/api/test', (req, res) => {
+  res.status(200).json({ message: 'API服务运行正常' });
+});
+
+// 管理员登录
+app.post('/api/admin/login', (req, res) => {
+  const { username, password } = req.body;
+  console.log('管理员登录请求:', { username });
+  
+  // 简单演示，固定账号密码
+  if (username === 'admin' && password === 'admin123') {
+    res.status(200).json({
+      message: '登录成功',
+      user: {
+        id: 1,
+        username: 'admin',
+        name: '系统管理员',
+        role: '管理员',
+      },
+      token: 'mock_token_' + Math.random().toString(36).substring(2, 15),
+    });
+  } else {
+    res.status(401).json({ message: '用户名或密码错误' });
   }
 });
 

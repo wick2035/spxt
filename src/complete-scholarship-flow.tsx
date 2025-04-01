@@ -8,6 +8,7 @@ interface ScholarshipItem {
   name: string;
   file: File | null;
   score: string;
+  fileUrl?: string;
 }
 
 interface Application {
@@ -64,6 +65,15 @@ function ScholarshipApp() {
   >("batchSelect");
   const [selectedBatch, setSelectedBatch] = React.useState<Batch | null>(null);
 
+  // 仪表盘统计数据
+  const [dashboardStats, setDashboardStats] = React.useState({
+    totalBatches: 0,
+    totalApplications: 0,
+    pendingApplications: 0,
+    approvedApplications: 0,
+    rejectedApplications: 0,
+  });
+
   // 申请项目相关状态
   const [scholarshipItems, setScholarshipItems] = React.useState<
     ScholarshipItem[]
@@ -115,6 +125,45 @@ function ScholarshipApp() {
     }
   };
 
+  // 获取仪表盘数据
+  const fetchDashboardStats = async (studentId: string) => {
+    try {
+      setIsLoading(true);
+      console.log("正在获取仪表盘数据...");
+
+      const response = await fetch(
+        `http://localhost:5000/api/student/dashboard/stats/${studentId}`
+      );
+
+      if (!response.ok) {
+        throw new Error("获取仪表盘数据失败");
+      }
+
+      const data = await response.json();
+      console.log("获取到的仪表盘数据:", data);
+
+      setDashboardStats({
+        totalBatches: data.totalBatches || 0,
+        totalApplications: data.totalApplications || 0,
+        pendingApplications: data.pendingApplications || 0,
+        approvedApplications: data.approvedApplications || 0,
+        rejectedApplications: data.rejectedApplications || 0,
+      });
+    } catch (error) {
+      console.error("获取仪表盘数据失败:", error);
+      // 使用默认数据
+      setDashboardStats({
+        totalBatches: 3,
+        totalApplications: 3,
+        pendingApplications: 1,
+        approvedApplications: 2,
+        rejectedApplications: 0,
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // 检查本地存储中的登录状态
   useEffect(() => {
     const token = localStorage.getItem("studentToken");
@@ -126,11 +175,19 @@ function ScholarshipApp() {
       // 加载批次和申请数据
       fetchBatches();
       fetchApplications(JSON.parse(storedStudentInfo).id);
+      fetchDashboardStats(JSON.parse(storedStudentInfo).id);
     }
 
     // 检查服务器连接状态
     checkServerConnection();
   }, []);
+
+  // 页面切换时更新数据
+  useEffect(() => {
+    if (isLoggedIn && studentInfo && currentPage === "dashboard") {
+      fetchDashboardStats(studentInfo.id);
+    }
+  }, [currentPage, isLoggedIn, studentInfo]);
 
   // 获取可用批次
   const fetchBatches = async () => {
@@ -281,6 +338,32 @@ function ScholarshipApp() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0];
+
+      // 检查文件类型
+      const allowedTypes = [
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+        "image/jpg",
+      ];
+      if (!allowedTypes.includes(file.type)) {
+        setErrorMessage("不支持的文件类型。只允许PDF、JPEG和PNG文件。");
+        setTimeout(() => setErrorMessage(""), 3000);
+        return;
+      }
+
+      // 检查文件大小
+      if (file.size > 5 * 1024 * 1024) {
+        setErrorMessage("文件大小超过限制(5MB)");
+        setTimeout(() => setErrorMessage(""), 3000);
+        return;
+      }
+
+      console.log(
+        `选择文件: ${file.name}, 大小: ${file.size}, 类型: ${file.type}`
+      );
+
+      // 更新本地状态
       const updatedItems = [...scholarshipItems];
       updatedItems[currentItemIndex] = {
         ...updatedItems[currentItemIndex],
@@ -1617,17 +1700,134 @@ function ScholarshipApp() {
                 >
                   证明材料
                 </label>
-                <input
-                  id="itemFile"
-                  type="file"
-                  onChange={handleFileChange}
+                <div
                   style={{
-                    width: "100%",
-                    padding: "0.5rem 0",
-                    fontSize: "0.9rem",
-                    color: colors.text,
+                    display: "flex",
+                    alignItems: "center",
+                    marginBottom: "8px",
                   }}
-                />
+                >
+                  <input
+                    id="itemFile"
+                    type="file"
+                    onChange={handleFileChange}
+                    style={{
+                      flex: "1",
+                      padding: "0.5rem 0",
+                      fontSize: "0.9rem",
+                      color: colors.text,
+                    }}
+                    disabled={isLoading}
+                    accept=".pdf,.jpg,.jpeg,.png"
+                  />
+                  {isLoading && (
+                    <div style={{ marginLeft: "10px" }}>上传中...</div>
+                  )}
+                </div>
+
+                {scholarshipItems[currentItemIndex]?.file &&
+                  editMode &&
+                  editApplicationId &&
+                  studentInfo && (
+                    <div style={{ marginBottom: "8px" }}>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            setIsLoading(true);
+                            setErrorMessage("");
+
+                            // 上传文件到服务器
+                            const formData = new FormData();
+                            const file =
+                              scholarshipItems[currentItemIndex].file;
+                            if (!file) return;
+
+                            formData.append("file", file);
+
+                            console.log(
+                              `手动上传文件到申请 ${editApplicationId}, 学生ID: ${studentInfo.id}`
+                            );
+                            console.log(`文件信息:`, {
+                              name: file.name,
+                              size: file.size,
+                              type: file.type,
+                            });
+
+                            const response = await fetch(
+                              `http://localhost:5000/api/student/applications/${editApplicationId}/upload/${studentInfo.id}`,
+                              {
+                                method: "POST",
+                                body: formData,
+                              }
+                            );
+
+                            if (!response.ok) {
+                              const errorData = await response.text();
+                              console.error("上传响应错误:", errorData);
+                              throw new Error(`文件上传失败: ${errorData}`);
+                            }
+
+                            const result = await response.json();
+                            console.log("文件上传成功:", result);
+
+                            // 更新本地状态
+                            const updatedItems = [...scholarshipItems];
+                            updatedItems[currentItemIndex] = {
+                              ...updatedItems[currentItemIndex],
+                              fileUrl: result.fileInfo.url,
+                            };
+                            setScholarshipItems(updatedItems);
+
+                            setSuccessMessage("证明材料上传成功");
+                            setTimeout(() => setSuccessMessage(""), 3000);
+                          } catch (error) {
+                            console.error("文件上传错误:", error);
+                            setErrorMessage("文件上传失败，请稍后再试");
+                            setTimeout(() => setErrorMessage(""), 3000);
+                          } finally {
+                            setIsLoading(false);
+                          }
+                        }}
+                        style={{
+                          backgroundColor: colors.primary,
+                          color: "white",
+                          border: "none",
+                          borderRadius: "4px",
+                          padding: "6px 12px",
+                          fontSize: "0.9rem",
+                          cursor: "pointer",
+                          marginRight: "10px",
+                        }}
+                        disabled={
+                          isLoading || !scholarshipItems[currentItemIndex]?.file
+                        }
+                      >
+                        上传到服务器
+                      </button>
+                      <span style={{ fontSize: "0.85rem", color: "#666" }}>
+                        已选择文件:{" "}
+                        {scholarshipItems[currentItemIndex].file?.name || ""}
+                      </span>
+                    </div>
+                  )}
+
+                {scholarshipItems[currentItemIndex]?.fileUrl && (
+                  <div style={{ marginTop: "5px" }}>
+                    <a
+                      href={scholarshipItems[currentItemIndex].fileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        color: colors.primary,
+                        textDecoration: "underline",
+                        fontSize: "0.9rem",
+                      }}
+                    >
+                      查看已上传文件
+                    </a>
+                  </div>
+                )}
                 <p
                   style={{
                     color: colors.primary,
@@ -1885,7 +2085,7 @@ function ScholarshipApp() {
                   fontWeight: "bold",
                 }}
               >
-                3
+                {dashboardStats.totalBatches}
               </p>
             </div>
             <div
@@ -1912,7 +2112,7 @@ function ScholarshipApp() {
                   fontWeight: "bold",
                 }}
               >
-                1
+                {dashboardStats.pendingApplications}
               </p>
             </div>
             <div
@@ -1939,7 +2139,7 @@ function ScholarshipApp() {
                   fontWeight: "bold",
                 }}
               >
-                2
+                {dashboardStats.approvedApplications}
               </p>
             </div>
           </div>

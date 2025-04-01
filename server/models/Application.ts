@@ -12,6 +12,7 @@ class Application extends Model {
   public reviewedBy?: string;
   public reviewedAt?: Date;
   public scholarshipItems!: any; // JSON数据
+  public totalScore?: number;
   
   // 时间戳
   public readonly createdAt!: Date;
@@ -64,6 +65,11 @@ Application.init({
     type: DataTypes.JSON,
     allowNull: false,
     defaultValue: []
+  },
+  totalScore: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: 0
   }
 }, {
   sequelize,

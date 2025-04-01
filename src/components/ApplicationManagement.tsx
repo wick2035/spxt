@@ -16,10 +16,10 @@ interface Application {
     name: string;
     type: string;
   };
-  user?: {
+  user: {
     id: string;
     name: string;
-    studentId: string;
+    username: string;
   };
 }
 
@@ -454,7 +454,7 @@ const ApplicationManagement: React.FC = () => {
                         {application.user?.name || "-"}
                       </td>
                       <td style={{ padding: "12px" }}>
-                        {application.user?.studentId || "-"}
+                        {application.user?.username || "-"}
                       </td>
                       <td style={{ padding: "12px" }}>
                         {application.batch?.name}
@@ -565,7 +565,7 @@ const ApplicationManagement: React.FC = () => {
                 </p>
                 <p>
                   <strong>学号：</strong>
-                  {selectedApplication.user?.studentId || "-"}
+                  {selectedApplication.user?.username || "-"}
                 </p>
                 <p>
                   <strong>批次：</strong>

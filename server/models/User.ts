@@ -6,10 +6,15 @@ class User extends Model {
   public id!: string;
   public username!: string;
   public password!: string;
-  public role!: 'admin' | 'user';
+  public role!: 'admin' | 'user' | '学生' | '管理员';
   public name?: string;
   public studentId?: string;
   public department?: string;
+  public email?: string;
+  public status?: '正常' | '禁用';
+  public grade?: string;
+  public major?: string;
+  public lastLogin?: Date;
   
   // 时间戳
   public readonly createdAt!: Date;
@@ -39,9 +44,6 @@ User.init({
   role: {
     type: DataTypes.STRING,
     allowNull: false,
-    validate: {
-      isIn: [['admin', 'user']]
-    },
     defaultValue: 'user'
   },
   name: {
@@ -54,6 +56,30 @@ User.init({
   },
   department: {
     type: DataTypes.STRING,
+    allowNull: true
+  },
+  email: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    validate: {
+      isEmail: true
+    }
+  },
+  status: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    defaultValue: '正常'
+  },
+  grade: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  major: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  lastLogin: {
+    type: DataTypes.DATE,
     allowNull: true
   }
 }, {
