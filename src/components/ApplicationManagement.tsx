@@ -21,6 +21,7 @@ interface Application {
     name: string;
     studentId: string;
   };
+  filePaths?: string[];
 }
 
 const ApplicationManagement: React.FC = () => {
@@ -579,22 +580,191 @@ const ApplicationManagement: React.FC = () => {
                   <strong>申请时间：</strong>
                   {new Date(selectedApplication.createdAt).toLocaleString()}
                 </p>
-                <div>
+
+                <div style={{ marginBottom: "15px" }}>
                   <strong>奖学金项目：</strong>
-                  <ul
+                  <div
                     style={{
-                      maxHeight: "150px",
+                      maxHeight: "300px",
                       overflowY: "auto",
                       margin: "10px 0",
+                      backgroundColor: "#f5f5f5",
+                      padding: "15px",
+                      borderRadius: "4px",
                     }}
                   >
                     {selectedApplication.scholarshipItems.map((item, index) => (
-                      <li key={index}>
-                        {item.name} - {item.score}分
-                        {item.description && ` (${item.description})`}
-                      </li>
+                      <div
+                        key={index}
+                        style={{
+                          marginBottom: "15px",
+                          padding: "10px",
+                          backgroundColor: "white",
+                          borderRadius: "4px",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+                        }}
+                      >
+                        <div style={{ marginBottom: "8px" }}>
+                          <strong>项目 {index + 1}：</strong>
+                          <span>{item.name}</span>
+                        </div>
+                        <div style={{ marginBottom: "8px" }}>
+                          <strong>类型：</strong>
+                          <span>{item.type}</span>
+                        </div>
+                        <div style={{ marginBottom: "8px" }}>
+                          <strong>级别：</strong>
+                          <span>{item.level}</span>
+                        </div>
+                        <div style={{ marginBottom: "8px" }}>
+                          <strong>分数：</strong>
+                          <span>{item.score}</span>
+                        </div>
+                        {selectedApplication.filePaths &&
+                          selectedApplication.filePaths.length > 0 && (
+                            <div>
+                              <strong>佐证材料：</strong>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  flexWrap: "wrap",
+                                  gap: "10px",
+                                  marginTop: "5px",
+                                }}
+                              >
+                                {selectedApplication.filePaths
+                                  .filter(
+                                    (_, fileIndex) =>
+                                      Math.floor(fileIndex / 10) === index
+                                  )
+                                  .map((filePath, fileIndex) => {
+                                    const fileExt = filePath
+                                      .split(".")
+                                      .pop()
+                                      ?.toLowerCase();
+                                    const isImage = [
+                                      "jpg",
+                                      "jpeg",
+                                      "png",
+                                    ].includes(fileExt || "");
+                                    const isPDF = fileExt === "pdf";
+
+                                    return (
+                                      <div
+                                        key={fileIndex}
+                                        style={{
+                                          width: "150px",
+                                          height: "150px",
+                                          backgroundColor: "#f0f0f0",
+                                          borderRadius: "4px",
+                                          display: "flex",
+                                          flexDirection: "column",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          cursor: "pointer",
+                                          overflow: "hidden",
+                                        }}
+                                        onClick={() => {
+                                          try {
+                                            const fileUrl = `http://localhost:5000${filePath}`;
+                                            console.log(
+                                              "Opening file URL:",
+                                              fileUrl
+                                            );
+                                            window.open(fileUrl, "_blank");
+                                          } catch (error) {
+                                            console.error(
+                                              "Error opening file:",
+                                              error
+                                            );
+                                            alert(
+                                              "打开文件失败，请检查文件路径是否正确"
+                                            );
+                                          }
+                                        }}
+                                      >
+                                        {isImage ? (
+                                          <img
+                                            src={`http://localhost:5000${filePath}`}
+                                            alt={`佐证材料 ${fileIndex + 1}`}
+                                            style={{
+                                              maxWidth: "100%",
+                                              maxHeight: "100%",
+                                              objectFit: "contain",
+                                            }}
+                                            onError={(e) => {
+                                              console.error(
+                                                "Image load error:",
+                                                e
+                                              );
+                                              console.error(
+                                                "Failed file path:",
+                                                filePath
+                                              );
+                                              e.currentTarget.style.backgroundColor =
+                                                "#f0f0f0";
+                                              e.currentTarget.style.display =
+                                                "flex";
+                                              e.currentTarget.style.alignItems =
+                                                "center";
+                                              e.currentTarget.style.justifyContent =
+                                                "center";
+                                              e.currentTarget.innerHTML = `
+                                                <div style="text-align: center; color: #666;">
+                                                  <div style="font-size: 24px; margin-bottom: 5px;">📷</div>
+                                                  <div style="font-size: 12px;">图片加载失败</div>
+                                                </div>
+                                              `;
+                                            }}
+                                          />
+                                        ) : isPDF ? (
+                                          <div style={{ textAlign: "center" }}>
+                                            <div
+                                              style={{
+                                                fontSize: "40px",
+                                                color: "#666",
+                                              }}
+                                            >
+                                              📄
+                                            </div>
+                                            <div
+                                              style={{
+                                                fontSize: "12px",
+                                                color: "#666",
+                                              }}
+                                            >
+                                              PDF文件
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <div style={{ textAlign: "center" }}>
+                                            <div
+                                              style={{
+                                                fontSize: "40px",
+                                                color: "#666",
+                                              }}
+                                            >
+                                              📎
+                                            </div>
+                                            <div
+                                              style={{
+                                                fontSize: "12px",
+                                                color: "#666",
+                                              }}
+                                            >
+                                              其他文件
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                              </div>
+                            </div>
+                          )}
+                      </div>
                     ))}
-                  </ul>
+                  </div>
                 </div>
               </div>
               <div style={{ marginBottom: "15px" }}>

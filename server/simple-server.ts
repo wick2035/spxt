@@ -2,6 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { Sequelize, DataTypes, Model, Op } from 'sequelize';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 
 // 加载环境变量
 dotenv.config();
@@ -85,6 +88,7 @@ class Application extends Model {
   public reviewedBy?: string;
   public reviewedAt?: string;
   public scholarshipItems?: any[];
+  public filePaths?: string[];
   public createdAt!: Date;
 }
 
@@ -145,6 +149,30 @@ Application.init(
           this.setDataValue('scholarshipItems', value);
         } else {
           this.setDataValue('scholarshipItems', JSON.stringify(value));
+        }
+      }
+    },
+    filePaths: {
+      type: DataTypes.TEXT, // 使用TEXT类型存储JSON数据
+      allowNull: true,
+      get() {
+        const rawValue = this.getDataValue('filePaths');
+        if (!rawValue) return [];
+        
+        try {
+          return JSON.parse(rawValue);
+        } catch (e) {
+          console.error('解析filePaths失败:', e);
+          return rawValue;
+        }
+      },
+      set(value) {
+        if (value === null || value === undefined) {
+          this.setDataValue('filePaths', null);
+        } else if (typeof value === 'string') {
+          this.setDataValue('filePaths', value);
+        } else {
+          this.setDataValue('filePaths', JSON.stringify(value));
         }
       }
     },
@@ -599,39 +627,78 @@ app.get('/api/student/applications/:studentId', async (req, res) => {
   }
 });
 
+// 配置文件上传
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const studentId = req.body.studentId;
+    const uploadDir = path.join(__dirname, '../uploads', studentId);
+    // 确保上传目录存在
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const timestamp = Date.now();
+    const ext = path.extname(file.originalname);
+    cb(null, `${timestamp}${ext}`);
+  },
+});
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 限制5MB
+  },
+  fileFilter: function (req, file, cb) {
+    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('不支持的文件类型'));
+    }
+  },
+});
+
+// 添加静态文件服务，使用绝对路径
+const uploadsPath = path.join(__dirname, '../uploads');
+app.use('/uploads', express.static(uploadsPath));
+console.log('静态文件目录配置在:', uploadsPath);
+
 // 创建学生申请
-app.post('/api/student/applications', async (req, res) => {
+app.post('/api/student/applications', upload.array('files'), async (req, res) => {
   try {
-    const { studentId, batchId, scholarshipItems } = req.body;
-    console.log('创建学生申请:', { studentId, batchId, scholarshipItems });
-    
-    // 验证批次是否存在且进行中
+    const { studentId, batchId, scholarshipItems, totalScore } = req.body;
+    const scholarshipItemsData = JSON.parse(scholarshipItems);
+
+    // 验证批次
     const batch = await Batch.findByPk(batchId);
+
     if (!batch) {
-      return res.status(404).json({ message: '找不到批次' });
+      return res.status(404).json({ message: "未找到指定的奖学金批次" });
     }
-    
-    if (batch.status !== '进行中') {
-      return res.status(400).json({ message: '该批次已经结束或未开始，无法申请' });
-    }
-    
-    // 创建申请
+
+    // 处理上传的文件
+    const filePaths = req.files ? (req.files as Express.Multer.File[]).map(file => {
+      // 使用相对于uploads目录的路径
+      const relativePath = path.relative(uploadsPath, file.path).replace(/\\/g, '/');
+      return `/uploads/${relativePath}`;
+    }) : [];
+
+    // 创建申请记录
     const application = await Application.create({
       userId: studentId,
       batchId: batchId,
-      status: '待审核',
-      scholarshipItems: scholarshipItems || []
+      status: "待审核",
+      scholarshipItems: scholarshipItemsData,
+      totalScore: parseFloat(totalScore),
+      filePaths: filePaths,
     });
-    
-    console.log('申请创建成功:', application);
-    res.status(201).json({ 
-      success: true, 
-      message: '申请提交成功', 
-      applicationId: application.id 
-    });
+
+    res.status(201).json(application);
   } catch (error) {
-    console.error('创建学生申请错误:', error);
-    res.status(500).json({ message: '服务器错误' });
+    console.error("创建申请失败:", error);
+    res.status(500).json({ message: "创建申请失败" });
   }
 });
 

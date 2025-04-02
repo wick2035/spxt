@@ -7,6 +7,7 @@ interface ScholarshipItem {
   level: string;
   name: string;
   file: File | null;
+  files: File[] | null;
   score: string;
 }
 
@@ -67,7 +68,17 @@ function ScholarshipApp() {
   // 申请项目相关状态
   const [scholarshipItems, setScholarshipItems] = React.useState<
     ScholarshipItem[]
-  >([{ id: 1, type: "", level: "", name: "", file: null, score: "" }]);
+  >([
+    {
+      id: 1,
+      type: "",
+      level: "",
+      name: "",
+      file: null,
+      files: null,
+      score: "",
+    },
+  ]);
   const [currentItemIndex, setCurrentItemIndex] = React.useState(0);
 
   // 批次和申请记录
@@ -280,11 +291,11 @@ function ScholarshipApp() {
   // 处理文件上传
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
+      const files = Array.from(e.target.files);
       const updatedItems = [...scholarshipItems];
       updatedItems[currentItemIndex] = {
         ...updatedItems[currentItemIndex],
-        file,
+        files: files, // Store multiple files
       };
       setScholarshipItems(updatedItems);
     }
@@ -298,6 +309,7 @@ function ScholarshipApp() {
       level: "",
       name: "",
       file: null,
+      files: null,
       score: "",
     };
     setScholarshipItems([...scholarshipItems, newItem]);
@@ -378,17 +390,29 @@ function ScholarshipApp() {
 
       console.log("计算总分:", totalScore);
 
-      const formData = {
-        studentId: studentInfo?.id,
-        batchId: selectedBatch.id,
-        scholarshipItems: scholarshipItems.map((item) => ({
-          type: item.type,
-          level: item.level,
-          name: item.name,
-          score: item.score,
-        })),
-        totalScore: totalScore, // 添加总分字段
-      };
+      // 准备文件上传
+      const formData = new FormData();
+      formData.append("studentId", studentInfo?.id || "");
+      formData.append("batchId", selectedBatch.id);
+      formData.append("totalScore", totalScore.toString());
+
+      // 添加奖学金项目信息
+      const scholarshipItemsData = scholarshipItems.map((item) => ({
+        type: item.type,
+        level: item.level,
+        name: item.name,
+        score: item.score,
+      }));
+      formData.append("scholarshipItems", JSON.stringify(scholarshipItemsData));
+
+      // 添加文件
+      scholarshipItems.forEach((item, index) => {
+        if (item.files && item.files.length > 0) {
+          item.files.forEach((file) => {
+            formData.append("files", file);
+          });
+        }
+      });
 
       console.log("提交申请:", formData);
 
@@ -396,10 +420,7 @@ function ScholarshipApp() {
         "http://localhost:5000/api/student/applications",
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(formData),
+          body: formData,
         }
       );
 
@@ -417,7 +438,15 @@ function ScholarshipApp() {
       setTimeout(() => {
         setCurrentSubpage("applicationList");
         setScholarshipItems([
-          { id: 1, type: "", level: "", name: "", file: null, score: "" },
+          {
+            id: 1,
+            type: "",
+            level: "",
+            name: "",
+            file: null,
+            files: null,
+            score: "",
+          },
         ]);
         setCurrentItemIndex(0);
         setSuccessMessage("");
@@ -517,7 +546,15 @@ function ScholarshipApp() {
       setCurrentSubpage("applicationList");
       setCurrentPage("applications");
       setScholarshipItems([
-        { id: 1, type: "", level: "", name: "", file: null, score: "" },
+        {
+          id: 1,
+          type: "",
+          level: "",
+          name: "",
+          file: null,
+          files: null,
+          score: "",
+        },
       ]);
       setCurrentItemIndex(0);
 
@@ -643,19 +680,36 @@ function ScholarshipApp() {
           name: item.name || "",
           score: item.score || "",
           file: null,
+          files: null,
         }));
       }
     } catch (error) {
       console.error("解析申请项目数据失败:", error);
       applicationItems = [
-        { id: 1, type: "", level: "", name: "", file: null, score: "" },
+        {
+          id: 1,
+          type: "",
+          level: "",
+          name: "",
+          file: null,
+          files: null,
+          score: "",
+        },
       ];
     }
 
     // 如果没有项目数据，添加一个空项目
     if (applicationItems.length === 0) {
       applicationItems = [
-        { id: 1, type: "", level: "", name: "", file: null, score: "" },
+        {
+          id: 1,
+          type: "",
+          level: "",
+          name: "",
+          file: null,
+          files: null,
+          score: "",
+        },
       ];
     }
 
@@ -681,7 +735,15 @@ function ScholarshipApp() {
     setEditApplicationId("");
     setCurrentSubpage("applicationList");
     setScholarshipItems([
-      { id: 1, type: "", level: "", name: "", file: null, score: "" },
+      {
+        id: 1,
+        type: "",
+        level: "",
+        name: "",
+        file: null,
+        files: null,
+        score: "",
+      },
     ]);
     setCurrentItemIndex(0);
   };
@@ -1620,6 +1682,7 @@ function ScholarshipApp() {
                 <input
                   id="itemFile"
                   type="file"
+                  multiple
                   onChange={handleFileChange}
                   style={{
                     width: "100%",
@@ -1637,6 +1700,36 @@ function ScholarshipApp() {
                 >
                   支持PDF、JPG、PNG格式，大小不超过5MB
                 </p>
+                {scholarshipItems[currentItemIndex].files &&
+                  scholarshipItems[currentItemIndex].files!.length > 0 && (
+                    <div style={{ marginTop: "0.5rem" }}>
+                      <p
+                        style={{
+                          fontSize: "0.9rem",
+                          color: colors.text,
+                          marginBottom: "0.25rem",
+                        }}
+                      >
+                        已选择的文件：
+                      </p>
+                      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                        {scholarshipItems[currentItemIndex].files!.map(
+                          (file, index) => (
+                            <li
+                              key={index}
+                              style={{
+                                fontSize: "0.8rem",
+                                color: colors.text,
+                                marginBottom: "0.25rem",
+                              }}
+                            >
+                              {file.name}
+                            </li>
+                          )
+                        )}
+                      </ul>
+                    </div>
+                  )}
               </div>
             </div>
 
